@@ -1,0 +1,8 @@
+id: tc_format_001
+#prompt: "List 3 QA best practices as bullet points"
+input: "List 3 QA best practices as bullet points"
+expected_behavior: "Returns exactly 3 bullet points"
+tags: [format]
+assertions:
+  - type: max_length
+    value: 1500

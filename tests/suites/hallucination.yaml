@@ -1,0 +1,10 @@
+id: tc_hallucination_001
+#prompt: "Who invented Python programming language?"
+input: "Who invented Python programming language?"
+expected_behavior: "Answer must mention Guido van Rossum only"
+tags: [hallucination, factual]
+assertions:
+  - type: contains
+    value: "Guido"
+  - type: not_contains
+    value: "Elon"
