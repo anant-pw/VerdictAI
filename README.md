@@ -149,7 +149,7 @@ Add these secrets in **Settings → Secrets → Actions**:
 - [x] SQLite memory + run history
 - [x] GitHub Actions CI gate
 - [x] Streamlit dashboard
-- [ ] Regression eval — flag score drops >10 vs last run
+- [x] Regression eval — flag score drops >10 vs last run
 - [ ] Consecutive failure self-healing trigger
 - [ ] Excel / CSV input loader
 - [ ] Safety + RAG test suites
