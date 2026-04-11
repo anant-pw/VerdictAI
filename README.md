@@ -169,5 +169,5 @@ Add these secrets in **Settings → Secrets → Actions**:
 
 ## Author
 
-Built by Max — SDET/QA Architect @ BOLD Technologies.  
+Built by Max — SDET/QA Architect.
 [LinkedIn](https://linkedin.com/in/yourprofile) · [GitHub](https://github.com/yourname)
