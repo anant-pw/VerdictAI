@@ -1,17 +1,17 @@
 # Core
-pyyaml==6.0.1
-pytest==8.1.1
-python-dotenv==1.0.1
+pyyaml
+pytest
+python-dotenv
 
 # LLM Providers
-groq==1.1.2
+groq
 langchain
 langchain-groq
 langchain-google-genai
 langchain-openai
 
 # Retry / reliability
-tenacity>=8.2.0
+tenacity
 
 # Evaluation
 sentence-transformers
