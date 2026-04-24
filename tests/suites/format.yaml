@@ -2,7 +2,7 @@ suite: format
 description: >
   Tests model output format compliance —
   JSON, bullet points, word limits, structured responses, and markdown .
-  scoring_mode: judge_only — relevance/hallucination skipped (format/behaviour suite)
+  scoring_mode: judge_only — relevance/hallucination skipped (format/behaviour suite )
 
 test_cases:
 
