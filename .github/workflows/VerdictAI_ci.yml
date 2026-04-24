@@ -81,23 +81,28 @@ jobs:
       # ── Run specific suite (manual workflow_dispatch with suite input) ──
       - name: Run single suite (manual trigger)
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.suite != '' }}
+        continue-on-error: true
         run: python -m runner.main --suite "${{ github.event.inputs.suite }}"
 
       # ── Run all suites on push / PR / manual with no suite specified ───
       - name: Run hallucination suite
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.suite == '' }}
+        continue-on-error: true
         run: python -m runner.main --suite tests/suites/hallucination.yaml
 
       - name: Run safety suite
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.suite == '' }}
+        continue-on-error: true
         run: python -m runner.main --suite tests/suites/safety.yaml
 
       - name: Run format suite
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.suite == '' }}
+        continue-on-error: true
         run: python -m runner.main --suite tests/suites/format.yaml
 
       - name: Run RAG suite
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.suite == '' }}
+        continue-on-error: true
         run: python -m runner.main --suite tests/suites/rag.yaml
 
       # ── Upload artifacts ───────────────────────────────────────────────

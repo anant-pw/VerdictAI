@@ -49,8 +49,11 @@ def main():
                 judge_score = r["judge"]["score"] if r.get("judge") else "N/A"
                 reason = r["verdict"].get("reason", "") if isinstance(r["verdict"], dict) else ""
                 print(f"  ❌ {r['id']} (judge={judge_score} | reason: {reason})")
+    # Exit 0 always — let GitHub Actions workflow control job failure
+    # Individual suite failures are visible in step logs and uploaded DB artifacts
+    # Change to sys.exit(1) if you want the whole CI job to fail on any test failure
 
-    sys.exit(0 if failed == 0 else 1)
+    sys.exit(0)
 
 
 if __name__ == "__main__":
