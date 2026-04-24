@@ -1,13 +1,14 @@
 name: VerdictAI — Manual CI Gate
 
 on:
+  push:
+    branches: [ main ]
   workflow_dispatch:
     inputs:
       suite:
         description: "Test suite to run (relative path)"
         required: true
         default: "tests/suites/hallucination.yaml"
-
 jobs:
   eval:
     runs-on: ubuntu-latest
