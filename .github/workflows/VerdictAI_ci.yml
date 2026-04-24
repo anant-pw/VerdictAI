@@ -1,14 +1,25 @@
-name: VerdictAI — Manual CI Gate
+name: VerdictAI — CI Eval Gate
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
+      - master
+    paths-ignore:
+      - "**.md"
+      - ".gitignore"
+      - "docs/**"
+  pull_request:
+    branches:
+      - main
+      - master
   workflow_dispatch:
     inputs:
       suite:
-        description: "Test suite to run (relative path)"
-        required: true
-        default: "tests/suites/hallucination.yaml"
+        description: "Single suite to run (leave blank to run all)"
+        required: false
+        default: ""
+
 jobs:
   eval:
     runs-on: ubuntu-latest
@@ -22,20 +33,88 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Create config.env
+      - name: Create config.env from secrets
+        env:
+          GROQ_API_KEY:      ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL:        ${{ secrets.GROQ_MODEL }}
+          CEREBRAS_API_KEY:  ${{ secrets.CEREBRAS_API_KEY }}
+          CEREBRAS_MODEL:    ${{ secrets.CEREBRAS_MODEL }}
+          SAMBANOVA_API_KEY: ${{ secrets.SAMBANOVA_API_KEY }}
+          SAMBANOVA_MODEL:   ${{ secrets.SAMBANOVA_MODEL }}
+          JIRA_URL:          ${{ secrets.JIRA_URL }}
+          JIRA_EMAIL:        ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN:    ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_PROJECT_KEY:  ${{ secrets.JIRA_PROJECT_KEY }}
+          JIRA_ISSUE_TYPE:   ${{ secrets.JIRA_ISSUE_TYPE }}
+          GH_PAT:            ${{ secrets.GH_PAT }}
+          VERDICTAI_REPO:    ${{ secrets.VERDICTAI_REPO }}
         run: |
-          echo "GROQ_API_KEY=${{ secrets.GROQ_API_KEY }}" >> config.env
-          echo "GROQ_MODEL=${{ secrets.GROQ_MODEL }}" >> config.env
+          printf "GROQ_API_KEY=%s\n"      "$GROQ_API_KEY"      >> config.env
+          printf "GROQ_MODEL=%s\n"        "$GROQ_MODEL"        >> config.env
+          printf "CEREBRAS_API_KEY=%s\n"  "$CEREBRAS_API_KEY"  >> config.env
+          printf "CEREBRAS_MODEL=%s\n"    "$CEREBRAS_MODEL"    >> config.env
+          printf "SAMBANOVA_API_KEY=%s\n" "$SAMBANOVA_API_KEY" >> config.env
+          printf "SAMBANOVA_MODEL=%s\n"   "$SAMBANOVA_MODEL"   >> config.env
+          printf "JIRA_URL=%s\n"          "$JIRA_URL"          >> config.env
+          printf "JIRA_EMAIL=%s\n"        "$JIRA_EMAIL"        >> config.env
+          printf "JIRA_API_TOKEN=%s\n"    "$JIRA_API_TOKEN"    >> config.env
+          printf "JIRA_PROJECT_KEY=%s\n"  "$JIRA_PROJECT_KEY"  >> config.env
+          printf "JIRA_ISSUE_TYPE=%s\n"   "$JIRA_ISSUE_TYPE"   >> config.env
+          printf "GITHUB_TOKEN=%s\n"      "$GH_PAT"            >> config.env
+          printf "GITHUB_REPO=%s\n"       "$VERDICTAI_REPO"    >> config.env
+          printf "LANGCHAIN_TRACING_V2=false\n"                >> config.env
 
-      - name: Run Sentinel Eval
-        run: python -m runner.main --suite ${{ github.event.inputs.suite }}
+      - name: Reset database
+        run: python reset_db.py
 
-      - name: Upload SQLite DB as artifact
+      # ── Run specific suite (manual workflow_dispatch with suite input) ──
+      - name: Run single suite (manual trigger)
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.suite != '' }}
+        run: python -m runner.main --suite "${{ github.event.inputs.suite }}"
+
+      # ── Run all suites on push / PR / manual with no suite specified ───
+      - name: Run hallucination suite
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.suite == '' }}
+        run: python -m runner.main --suite tests/suites/hallucination.yaml
+
+      - name: Run safety suite
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.suite == '' }}
+        run: python -m runner.main --suite tests/suites/safety.yaml
+
+      - name: Run format suite
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.suite == '' }}
+        run: python -m runner.main --suite tests/suites/format.yaml
+
+      - name: Run RAG suite
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.suite == '' }}
+        run: python -m runner.main --suite tests/suites/rag.yaml
+
+      # ── Upload artifacts ───────────────────────────────────────────────
+      - name: Upload eval databases
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: sentinel-db
-          path: memory/sentinel.db
+          name: verdictai-dbs-${{ github.run_number }}
+          path: |
+            verdictai.db
+            memory/sentinel.db
+          retention-days: 30
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verdictai-logs-${{ github.run_number }}
+          path: logs/
+          retention-days: 14
