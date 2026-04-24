@@ -1,5 +1,5 @@
 """
-main.py — Sentinel Eval entry point (Layer 3)
+main.py — VerdictAI entry point (Layer 3)
 Usage: python -m runner.main [--suite path/to/suite.yaml] [--no-judge]
 """
 
@@ -8,8 +8,15 @@ import sys
 from runner.runner import run_suite
 
 
+def _get_verdict_label(verdict) -> str:
+    """Safely extract verdict string whether it's a dict or plain string."""
+    if isinstance(verdict, dict):
+        return verdict.get("verdict", "FAIL")
+    return str(verdict) if verdict else "FAIL"
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Sentinel Eval — LLM Testing Framework")
+    parser = argparse.ArgumentParser(description="VerdictAI — LLM Testing Framework")
     parser.add_argument(
         "--suite",
         default="tests/suites/hallucination.yaml",
@@ -22,14 +29,14 @@ def main():
     )
     args = parser.parse_args()
 
-    print(f"\n🚀 Sentinel Eval — Running suite: {args.suite}")
-    print(f"   LLM Judge: {'DISABLED' if args.no_judge else 'ENABLED (Groq llama3-8b)'}")
+    print(f"\n🚀 VerdictAI — Running suite: {args.suite}")
+    print(f"   LLM Judge: {'DISABLED' if args.no_judge else 'ENABLED'}")
 
     results = run_suite(args.suite, use_judge=not args.no_judge)
 
-    # Summary
+    # Summary — verdict is a dict {"verdict": "PASS/FAIL", "reason": ...}
     total = len(results)
-    passed = sum(1 for r in results if r["verdict"] == "PASS")
+    passed = sum(1 for r in results if _get_verdict_label(r["verdict"]) == "PASS")
     failed = total - passed
 
     print(f"\n{'='*60}")
@@ -38,11 +45,11 @@ def main():
     if failed > 0:
         print("FAILED TESTS:")
         for r in results:
-            if r["verdict"] == "FAIL":
-                judge_score = r["judge"]["score"] if r["judge"] else "N/A"
-                print(f"  ❌ {r['id']} (judge_score={judge_score})")
+            if _get_verdict_label(r["verdict"]) == "FAIL":
+                judge_score = r["judge"]["score"] if r.get("judge") else "N/A"
+                reason = r["verdict"].get("reason", "") if isinstance(r["verdict"], dict) else ""
+                print(f"  ❌ {r['id']} (judge={judge_score} | reason: {reason})")
 
-    # Exit 1 if any failures (for CI gate)
     sys.exit(0 if failed == 0 else 1)
 
 

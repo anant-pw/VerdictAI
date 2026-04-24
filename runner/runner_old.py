@@ -22,7 +22,7 @@ from runner.retry_utils import inter_case_sleep
 from judge.llm_judge import judge_response
 from memory.regression import check_regression
 from memory.store import init_db, save_result
-from memory.self_heal import check_and_heal
+#from memory.self_heal import check_and_heal
 from judge.multi_judge import multi_judge_response
 from runner.logger import eval_logger
 from database.models import DatabaseManager
@@ -67,23 +67,11 @@ def run_suite(suite_path: str, use_judge: bool = True) -> list[dict]:
         else:
             failed += 1
 
-        # Persist result
+        # Existing logic...
         save_result(suite_name, result)
-
-        # Jira / self-heal trigger on FAIL
-        if verdict_str == "FAIL":
-            reason_str = result["verdict"].get("reason", "") if isinstance(result["verdict"], dict) else ""
-            try:
-                check_and_heal(
-                    test_id=result["id"],
-                    suite_name=suite_name,
-                    reason=reason_str,
-                    n=1,    # n=1 = create Jira on every individual FAIL
-                            # change to n=3 if you only want tickets on repeated fails
-                )
-            except Exception as _jira_err:
-                print(f"   ⚠️  Jira/self-heal error (non-fatal): {_jira_err}")
-
+        
+        # ... rest stays same ...
+        
         results.append(result)
         allure.write_test_result(result)
         _print_result(result)
@@ -156,12 +144,6 @@ def _run_case(case: dict, use_judge: bool = True, run_id: str = None, db: Databa
 
     # ... existing assertion logic ...
     
-    # scoring_mode controls which scorers run:
-    #   "full"       — judge + relevance + hallucination (default, good for factual suites)
-    #   "judge_only" — judge only, skip relevance + hallucination
-    #                  use for safety/format/behaviour suites where cosine similarity is meaningless
-    scoring_mode = case.get("scoring_mode", "full")
-
     assertions = case.get("assertions", [])
     heuristic_results = run_assertions(response, assertions)
     heuristic_pass = all(item["passed"] for item in heuristic_results)
@@ -170,7 +152,7 @@ def _run_case(case: dict, use_judge: bool = True, run_id: str = None, db: Databa
         judge_result = None
         relevance = None
         hallucination = None
-    else:
+    else:    
         if use_judge and expected_behavior:
             print(f"JUDGING against: '{expected_behavior}'")
             judge_result = multi_judge_response(
@@ -179,7 +161,8 @@ def _run_case(case: dict, use_judge: bool = True, run_id: str = None, db: Databa
                 expected_behavior=expected_behavior,
                 threshold=threshold,
             )
-
+            
+            # Log judge score
             if judge_result and judge_result.get("score"):
                 eval_logger.score_calculated(
                     test_id=test_id,
@@ -187,6 +170,7 @@ def _run_case(case: dict, use_judge: bool = True, run_id: str = None, db: Databa
                     score=judge_result["score"],
                     details={"reason": judge_result.get("reason")}
                 )
+                
                 if db:
                     db.save_score(
                         test_id=test_id,
@@ -194,69 +178,60 @@ def _run_case(case: dict, use_judge: bool = True, run_id: str = None, db: Databa
                         score_value=judge_result["score"],
                         details=judge_result.get("reason")
                     )
-
+            
             print(f"JUDGE → score={judge_result['score']} | verdict={judge_result['verdict']}")
-            print(f"GROQ:      {judge_result['groq']['score']} — {judge_result['groq']['reason']}")
-            second = judge_result.get('cerebras') or judge_result.get('sambanova') or judge_result.get('gemini') or {}
-            print(f"JUDGE-2:   {second.get('score','N/A')} — {second.get('reason','N/A')}")
+            print(f"GROQ:   {judge_result['groq']['score']} — {judge_result['groq']['reason']}")
+            print(f"SAMBANOVA: {judge_result['gemini']['score']} — {judge_result['gemini']['reason']}")
 
-            if scoring_mode == "full":
-                # Relevance scoring — compares response to expected via cosine similarity
-                # Only meaningful for factual suites where response and expected share vocabulary
-                relevance = get_relevance_score(response, expected_behavior)
-                eval_logger.score_calculated(
+            # ADD RELEVANCE SCORING HERE:
+            relevance = get_relevance_score(response, expected_behavior)
+            eval_logger.score_calculated(
+                test_id=test_id,
+                metric="relevance_score",
+                score=relevance["score"],
+                details={"cosine_similarity": relevance["cosine_similarity"]}
+            )
+            
+            if db:
+                db.save_score(
                     test_id=test_id,
-                    metric="relevance_score",
-                    score=relevance["score"],
-                    details={"cosine_similarity": relevance["cosine_similarity"]}
+                    metric_name="relevance_score",
+                    score_value=relevance["score"],
+                    details=f"cosine_sim={relevance['cosine_similarity']}"
                 )
-                if db:
-                    db.save_score(
-                        test_id=test_id,
-                        metric_name="relevance_score",
-                        score_value=relevance["score"],
-                        details=f"cosine_sim={relevance['cosine_similarity']}"
-                    )
-                print(f"RELEVANCE → score={relevance['score']} (cosine={relevance['cosine_similarity']})")
+            
+            print(f"RELEVANCE → score={relevance['score']} (cosine={relevance['cosine_similarity']})")
 
-                # Hallucination detection — uses expected_behavior as source context
-                # Only meaningful for factual suites where expected contains ground truth content
-                source_context = case.get("source_context", expected_behavior)
-                hallucination = detect_hallucination(response, source_context)
-                eval_logger.score_calculated(
+            # ADD HALLUCINATION DETECTION:
+            # Use expected_behavior as source context (or load from test case if available)
+            hallucination = detect_hallucination(response, expected_behavior)
+            eval_logger.score_calculated(
+                test_id=test_id,
+                metric="hallucination_score",
+                score=hallucination["score"],
+                details={
+                    "claims_total": hallucination["claims_total"],
+                    "supported": hallucination["claims_supported"],
+                    "contradicted": hallucination["claims_contradicted"]
+                }
+            )
+            
+            if db:
+                db.save_score(
                     test_id=test_id,
-                    metric="hallucination_score",
-                    score=hallucination["score"],
-                    details={
-                        "claims_total": hallucination["claims_total"],
-                        "supported": hallucination["claims_supported"],
-                        "contradicted": hallucination["claims_contradicted"]
-                    }
+                    metric_name="hallucination_score",
+                    score_value=hallucination["score"],
+                    details=f"claims={hallucination['claims_total']}, supported={hallucination['claims_supported']}"
                 )
-                if db:
-                    db.save_score(
-                        test_id=test_id,
-                        metric_name="hallucination_score",
-                        score_value=hallucination["score"],
-                        details=f"claims={hallucination['claims_total']}, supported={hallucination['claims_supported']}"
-                    )
-                print(f"HALLUCINATION → score={hallucination['score']}% ({hallucination['claims_supported']}/{hallucination['claims_total']} claims supported)")
-            else:
-                relevance = None
-                hallucination = None
-                print(f"   ℹ️  scoring_mode=judge_only — relevance + hallucination skipped")
-        else:
-            judge_result = None
-            relevance = None
-            hallucination = None
+            
+            print(f"HALLUCINATION → score={hallucination['score']}% ({hallucination['claims_supported']}/{hallucination['claims_total']} claims supported)")
 
     final_verdict = _compute_verdict(
         heuristic_pass=heuristic_pass,
-        heuristic_results=heuristic_results,
+        heuristic_results=heuristic_results,  # ✅ add this
         judge_result=judge_result,
         relevance=relevance,
-        hallucination=hallucination,
-        scoring_mode=scoring_mode,
+        hallucination=hallucination
     )
     
     
@@ -334,44 +309,49 @@ def _compute_verdict(
     judge_result=None,
     relevance=None,
     hallucination=None,
-    scoring_mode="full",
-    min_relevance=40,       # lowered from 50: cosine vs short expected_behavior strings runs ~45-85
-    max_hallucination=70    # raised from 50: expected_behavior is a short string, not a full doc
-                            # only fail if support rate drops below 30% (very clear hallucination)
+    min_relevance=50,
+    max_hallucination=50
 ):
-    # 1. HEURISTIC FAILURE — always applies regardless of scoring_mode
+    # -----------------------------------
+    # 1. EARLY EXIT (Heuristic Failure)
+    # -----------------------------------
     if not heuristic_pass:
         return {
             "verdict": "FAIL",
             "reason": "Heuristic checks failed",
-            "details": {"heuristics": heuristic_results}
+            "details": {
+                "heuristics": heuristic_results
+            }
         }
 
-    # 2. NO JUDGE DATA — both judges errored (e.g. API outage / 429 on all providers)
-    #    Do not penalise the test case for infrastructure failure.
-    #    Heuristics passed = enough signal to PASS with a warning.
+    # -----------------------------------
+    # 2. NO JUDGE DATA (edge case)
+    # -----------------------------------
     if judge_result is None:
         return {
             "verdict": "PASS",
-            "reason": "Heuristics passed — judge skipped (no judge data, possible API error)",
-            "details": {"heuristics": heuristic_results}
+            "reason": "Heuristics passed, no judge evaluation",
+            "details": {
+                "heuristics": heuristic_results
+            }
         }
 
-    # 3. SCORE-BASED RULES
+    # -----------------------------------
+    # 3. APPLY SCORE-BASED RULES
+    # -----------------------------------
     failures = []
 
-    # Relevance + hallucination only apply in full mode
-    # In judge_only mode (safety/format suites) cosine similarity is not meaningful
-    if scoring_mode == "full":
-        if relevance is not None and relevance["score"] < min_relevance:
-            failures.append(f"Low relevance ({relevance['score']:.1f} < {min_relevance})")
-        if hallucination is not None and hallucination["score"] < (100 - max_hallucination):
-            failures.append(f"High hallucination (support={hallucination['score']:.1f}%)")
+    if relevance is not None and (relevance["score"]) < min_relevance:
+        failures.append("Low relevance")
+    if hallucination is not None and (hallucination["score"]) > max_hallucination:
+        failures.append("High hallucination")
 
     if judge_result.get("verdict") == "FAIL":
         failures.append("LLM judge failed")
 
+    # -----------------------------------
     # 4. FINAL DECISION
+    # -----------------------------------
     if failures:
         return {
             "verdict": "FAIL",
@@ -380,8 +360,7 @@ def _compute_verdict(
                 "heuristics": heuristic_results,
                 "judge": judge_result,
                 "relevance": relevance,
-                "hallucination": hallucination,
-                "scoring_mode": scoring_mode,
+                "hallucination": hallucination
             }
         }
 
@@ -392,8 +371,7 @@ def _compute_verdict(
             "heuristics": heuristic_results,
             "judge": judge_result,
             "relevance": relevance,
-            "hallucination": hallucination,
-            "scoring_mode": scoring_mode,
+            "hallucination": hallucination
         }
     }
 

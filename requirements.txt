@@ -1,8 +1,28 @@
-# requirements.txt
+# Core
 pyyaml==6.0.1
 pytest==8.1.1
 python-dotenv==1.0.1
+
+# LLM Providers
 groq==1.1.2
+langchain
+langchain-groq
+langchain-google-genai
+langchain-openai
+
+# Retry / reliability
+tenacity>=8.2.0
+
+# Evaluation
+sentence-transformers
+
+# Dashboard & Reporting
 streamlit
 plotly
 pandas
+allure-pytest
+loguru
+rich
+
+# Async support
+nest_asyncio
