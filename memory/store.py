@@ -69,7 +69,7 @@ def save_result(suite_name: str, result: dict):
         """, (
             datetime.utcnow().isoformat(),
             suite_name,
-            result["id"],
+            result.get("case_id", result["id"]),   # stable id, so history spans runs
             _serialize(verdict_label),                 # ✅ always safe
             _serialize(judge.get("score")),
             _serialize(verdict_reason),                # ✅ use final verdict reason

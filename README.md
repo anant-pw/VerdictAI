@@ -12,18 +12,21 @@ It runs YAML-defined test suites against any LLM, scores responses using multipl
 
 ## Real Test Run Results
 
-| Suite | Cases | Pass Rate | Scoring Mode |
-|---|---|---|---|
-| Hallucination | 15 | 80% | full (judge + relevance + hallucination) |
-| Safety | 10 | 80% | judge_only |
-| Format | 10 | 40% | judge_only |
-| RAG | 4 | 75% | full |
-| **Total** | **39** | **65.4%** | |
+Each suite was run twice on 2026-04-23 (78 case executions). Counts come from `verdictai.db` in this repo.
 
-- **Avg LLM latency:** 381ms per call
+| Suite | Cases | Run 1 passed | Run 2 passed | Scoring Mode |
+|---|---|---|---|---|
+| Hallucination | 15 | 12 (80%) | 11 (73%) | full (judge + relevance + hallucination) |
+| Safety | 10 | 8 (80%) | 7 (70%) | judge_only |
+| Format | 10 | 4 (40%) | 4 (40%) | judge_only |
+| RAG | 4 | 3 (75%) | 2 (50%) | full |
+| **Total** | **39** | **27 (69.2%)** | **24 (61.5%)** | **51 / 78 = 65.4% over both runs** |
+
+- **Avg LLM latency:** 381ms per call (78 calls)
 - **Multi-judge agreement rate:** 95% (Groq + Cerebras agreed on 57/60 cases)
-- **Avg judge score:** 96.1 / 100
-- The 35% failures are not bugs — they are the framework correctly catching real LLM weaknesses in format compliance and context boundaries.
+- **Avg judge score:** 96.1 / 100 (63 judged cases)
+- The same suite gives a different pass count on a second run (for example 12 then 11 on Hallucination). The model under test runs at temperature 0.7, so results are not deterministic.
+- The failures are concentrated in format compliance and context boundaries.
 
 ---
 
@@ -214,7 +217,7 @@ python -m runner.main --suite tests/suites/rag.yaml
 python -m runner.main --suite tests/suites/rag.yaml
 ```
 
-The second run of each suite compares scores against the first and flags any drops > 10 points as regressions.
+The second run of each suite compares each case's judge score with its previous run and flags any drop > 10 points as a regression. Cases are matched by their YAML `id`, so keep ids stable and unique.
 
 ---
 
@@ -239,7 +242,15 @@ Input + Response + Expected Behavior
 - If both judges agree → consensus score used
 - If judges disagree by > 20 points → disagreement flagged in results
 - If one judge errors (429 / timeout) → surviving judge's score used alone
-- If both judges error → heuristic result used, judge score = N/A
+- If no judge answers → the case is marked **INCONCLUSIVE**: not a pass, not a fail, and not cached
+- By default the Groq judge uses the same model as the model under test (`GROQ_MODEL`). Set `GROQ_JUDGE_MODEL` to judge with a different one.
+
+The verdict rules are in `runner/verdict.py` and the consensus rules in `judge/consensus.py`. Both are plain functions with unit tests:
+
+```bash
+pip install pytest
+python -m pytest tests/unit -q
+```
 
 ---
 
@@ -289,7 +300,7 @@ A full 39-case run across all suites completes in ~14 minutes within free tier l
 
 ## Jira Integration
 
-When a test FAILs, VerdictAI can automatically create a Jira ticket:
+When the same case FAILs several runs in a row, VerdictAI can create a Jira ticket. The default is 3 consecutive failures; set `VERDICTAI_TICKET_AFTER_FAILS` to change it (`1` = every failure, `0` = never).
 
 ```env
 JIRA_URL=https://yourproject.atlassian.net

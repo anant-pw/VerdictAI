@@ -21,6 +21,18 @@ on:
         default: ""
 
 jobs:
+  # Fast, offline checks of the framework's own logic (verdict rules, judge
+  # consensus, assertions). No API keys and no LLM dependencies needed.
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pytest
+      - run: python -m pytest tests/unit -q
+
   eval:
     runs-on: ubuntu-latest
 

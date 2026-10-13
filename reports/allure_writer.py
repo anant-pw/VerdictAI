@@ -31,7 +31,7 @@ class AllureWriter:
         verdict_str    = verdict.get("verdict", "FAIL") if isinstance(verdict, dict) else str(verdict)
         verdict_reason = verdict.get("reason", "")      if isinstance(verdict, dict) else ""
 
-        status     = "passed" if verdict_str == "PASS" else "failed"
+        status     = {"PASS": "passed", "INCONCLUSIVE": "broken"}.get(verdict_str, "failed")
         test_uuid  = str(uuid.uuid4())
         now_ms     = int(datetime.now().timestamp() * 1000)
 
@@ -42,7 +42,7 @@ class AllureWriter:
             "fullName":    f"verdictai.{test_id}",
             "status":      status,
             "statusDetails": {
-                "message": verdict_reason if status == "failed" else "",
+                "message": verdict_reason if status != "passed" else "",
                 "trace":   ""
             },
             "start":  now_ms,
@@ -123,7 +123,7 @@ class AllureWriter:
 
             steps.append({
                 "name":   step_name,
-                "status": "passed" if judge_verdict == "PASS" else "failed",
+                "status": {"PASS": "passed", "INCONCLUSIVE": "broken"}.get(judge_verdict, "failed"),
                 "start":  now,
                 "stop":   now,
                 "statusDetails": {
@@ -194,11 +194,11 @@ class AllureWriter:
         # ── Final Verdict step ────────────────────────────────────────────
         steps.append({
             "name":   f"Final Verdict: {verdict_str}",
-            "status": "passed" if verdict_str == "PASS" else "failed",
+            "status": {"PASS": "passed", "INCONCLUSIVE": "broken"}.get(verdict_str, "failed"),
             "start":  now,
             "stop":   now,
             "statusDetails": {
-                "message": verdict_reason if verdict_str == "FAIL" else "",
+                "message": verdict_reason if verdict_str != "PASS" else "",
                 "trace":   ""
             },
         })

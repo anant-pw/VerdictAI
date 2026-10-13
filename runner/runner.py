@@ -20,8 +20,9 @@ from runner.assertions import run_assertions
 from runner.groq_model import get_response
 from runner.retry_utils import inter_case_sleep
 from judge.llm_judge import judge_response
-from memory.regression import check_regression
-from memory.store import init_db, save_result
+from memory.regression import evaluate_regression
+from memory.store import init_db, save_result, get_history
+from runner.verdict import compute_verdict as _compute_verdict
 from memory.self_heal import check_and_heal
 from judge.multi_judge import multi_judge_response
 from runner.logger import eval_logger
@@ -54,6 +55,11 @@ def run_suite(suite_path: str, use_judge: bool = True) -> list[dict]:
     results: list[dict] = []
     passed = 0
     failed = 0
+    inconclusive = 0
+
+    # Tickets (Jira / GitHub issue) are raised only after this many consecutive
+    # FAILs of the same case. 0 disables ticket creation.
+    ticket_after = int(os.getenv("VERDICTAI_TICKET_AFTER_FAILS", "3"))
 
     cases = suite if isinstance(suite, list) else suite.get("test_cases", [])
 
@@ -64,22 +70,35 @@ def run_suite(suite_path: str, use_judge: bool = True) -> list[dict]:
         verdict_str = result["verdict"].get("verdict") if isinstance(result["verdict"], dict) else result["verdict"]
         if verdict_str == "PASS":
             passed += 1
+        elif verdict_str == "INCONCLUSIVE":
+            inconclusive += 1
         else:
             failed += 1
+
+        # Regression check: compare the judge score with the previous run of
+        # the same case (case_id is stable across runs; result["id"] is not).
+        case_id = result.get("case_id", result["id"])
+        judge_score = (result.get("judge") or {}).get("score")
+        if judge_score is not None:
+            previous = get_history(case_id, limit=1)
+            result["regression"] = evaluate_regression(
+                previous[0]["score"] if previous else None, judge_score
+            )
+            if result["regression"]["regressed"]:
+                print(f"   {result['regression']['message']}")
 
         # Persist result
         save_result(suite_name, result)
 
-        # Jira / self-heal trigger on FAIL
-        if verdict_str == "FAIL":
+        # Jira / self-heal trigger on repeated FAIL
+        if verdict_str == "FAIL" and ticket_after > 0:
             reason_str = result["verdict"].get("reason", "") if isinstance(result["verdict"], dict) else ""
             try:
                 check_and_heal(
-                    test_id=result["id"],
+                    test_id=case_id,
                     suite_name=suite_name,
                     reason=reason_str,
-                    n=1,    # n=1 = create Jira on every individual FAIL
-                            # change to n=3 if you only want tickets on repeated fails
+                    n=ticket_after,
                 )
             except Exception as _jira_err:
                 print(f"   ⚠️  Jira/self-heal error (non-fatal): {_jira_err}")
@@ -94,6 +113,7 @@ def run_suite(suite_path: str, use_judge: bool = True) -> list[dict]:
         "total": len(cases),
         "passed": passed,
         "failed": failed,
+        "inconclusive": inconclusive,
         "pass_rate": passed / len(cases) if cases else 0
     }
     
@@ -117,8 +137,8 @@ def run_suite(suite_path: str, use_judge: bool = True) -> list[dict]:
 
 
 def _run_case(case: dict, use_judge: bool = True, run_id: str = None, db: DatabaseManager = None) -> dict:
-    test_id = f"{case.get('id', 'unknown')}_{run_id}"
-    #test_id = case.get("id", "unknown")
+    case_id = case.get("id", "unknown")        # stable across runs
+    test_id = f"{case_id}_{run_id}"            # unique per run, used by the dashboard DB
     input_text = case.get("input", "")
     expected_behavior = case.get("expected_behavior", "")
     threshold = case.get("judge_threshold", 70)
@@ -262,6 +282,7 @@ def _run_case(case: dict, use_judge: bool = True, run_id: str = None, db: Databa
     
     result = {
         "id": test_id,
+        "case_id": case_id,
         "input": input_text,
         "response": response,
         "latency_ms": latency_ms,
@@ -313,9 +334,7 @@ def _run_case(case: dict, use_judge: bool = True, run_id: str = None, db: Databa
             metadata=metadata  # will be json.dumps inside DB layer
         )
     
-    # Ensure verdict_label is always defined for logger (even if db block was skipped)
-    if "verdict_label" not in dir():
-        verdict_label = final_verdict.get("verdict") if isinstance(final_verdict, dict) else final_verdict
+    verdict_label = final_verdict.get("verdict") if isinstance(final_verdict, dict) else final_verdict
 
     eval_logger.test_case_end(
         test_id,
@@ -328,80 +347,12 @@ def _run_case(case: dict, use_judge: bool = True, run_id: str = None, db: Databa
     return result
 
 
-def _compute_verdict(
-    heuristic_pass,
-    heuristic_results,
-    judge_result=None,
-    relevance=None,
-    hallucination=None,
-    scoring_mode="full",
-    min_relevance=40,       # lowered from 50: cosine vs short expected_behavior strings runs ~45-85
-    max_hallucination=70    # raised from 50: expected_behavior is a short string, not a full doc
-                            # only fail if support rate drops below 30% (very clear hallucination)
-):
-    # 1. HEURISTIC FAILURE — always applies regardless of scoring_mode
-    if not heuristic_pass:
-        return {
-            "verdict": "FAIL",
-            "reason": "Heuristic checks failed",
-            "details": {"heuristics": heuristic_results}
-        }
-
-    # 2. NO JUDGE DATA — both judges errored (e.g. API outage / 429 on all providers)
-    #    Do not penalise the test case for infrastructure failure.
-    #    Heuristics passed = enough signal to PASS with a warning.
-    if judge_result is None:
-        return {
-            "verdict": "PASS",
-            "reason": "Heuristics passed — judge skipped (no judge data, possible API error)",
-            "details": {"heuristics": heuristic_results}
-        }
-
-    # 3. SCORE-BASED RULES
-    failures = []
-
-    # Relevance + hallucination only apply in full mode
-    # In judge_only mode (safety/format suites) cosine similarity is not meaningful
-    if scoring_mode == "full":
-        if relevance is not None and relevance["score"] < min_relevance:
-            failures.append(f"Low relevance ({relevance['score']:.1f} < {min_relevance})")
-        if hallucination is not None and hallucination["score"] < (100 - max_hallucination):
-            failures.append(f"High hallucination (support={hallucination['score']:.1f}%)")
-
-    if judge_result.get("verdict") == "FAIL":
-        failures.append("LLM judge failed")
-
-    # 4. FINAL DECISION
-    if failures:
-        return {
-            "verdict": "FAIL",
-            "reason": ", ".join(failures),
-            "details": {
-                "heuristics": heuristic_results,
-                "judge": judge_result,
-                "relevance": relevance,
-                "hallucination": hallucination,
-                "scoring_mode": scoring_mode,
-            }
-        }
-
-    return {
-        "verdict": "PASS",
-        "reason": "All checks passed",
-        "details": {
-            "heuristics": heuristic_results,
-            "judge": judge_result,
-            "relevance": relevance,
-            "hallucination": hallucination,
-            "scoring_mode": scoring_mode,
-        }
-    }
-
-
 def _print_result(result: dict) -> None:
     """
     Print final result summary for a test case.
     """
     verdict = result.get("verdict", "FAIL")
-    icon = "✅" if verdict == "PASS" else "❌"
+    if isinstance(verdict, dict):
+        verdict = verdict.get("verdict", "FAIL")
+    icon = {"PASS": "✅", "INCONCLUSIVE": "⚠️"}.get(verdict, "❌")
     print(f"{icon} FINAL VERDICT: {verdict}")

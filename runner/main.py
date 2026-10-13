@@ -37,10 +37,11 @@ def main():
     # Summary — verdict is a dict {"verdict": "PASS/FAIL", "reason": ...}
     total = len(results)
     passed = sum(1 for r in results if _get_verdict_label(r["verdict"]) == "PASS")
-    failed = total - passed
+    inconclusive = sum(1 for r in results if _get_verdict_label(r["verdict"]) == "INCONCLUSIVE")
+    failed = total - passed - inconclusive
 
     print(f"\n{'='*60}")
-    print(f"SUMMARY: {passed}/{total} passed | {failed} failed")
+    print(f"SUMMARY: {passed}/{total} passed | {failed} failed | {inconclusive} inconclusive")
 
     if failed > 0:
         print("FAILED TESTS:")

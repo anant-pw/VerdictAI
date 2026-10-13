@@ -14,6 +14,7 @@ from langchain_groq import ChatGroq
 from langchain_openai import ChatOpenAI
 from judge.llm_judge import _parse_judge_output
 from judge.judge_cache import cache_key, get_cached, set_cached
+from judge.consensus import combine_judges
 
 def _compact(text: str, max_chars: int = 300) -> str:
     """Truncate long strings to keep prompt lean."""
@@ -35,7 +36,9 @@ JUDGE_PROMPT = ChatPromptTemplate.from_template(
 _groq_chain = (
     JUDGE_PROMPT
     | ChatGroq(
-        model=os.getenv("GROQ_MODEL"),
+        # Set GROQ_JUDGE_MODEL to judge with a different model than the one
+        # under test (GROQ_MODEL); otherwise a model grades its own answers.
+        model=os.getenv("GROQ_JUDGE_MODEL") or os.getenv("GROQ_MODEL"),
         temperature=0.0,
         api_key=os.getenv("GROQ_API_KEY"),
     )
@@ -142,12 +145,12 @@ def multi_judge_response(
 
     Returns:
         {
-            "score":        int   (average of both judges),
-            "verdict":      "PASS" | "FAIL",
+            "score":        int | None  (average of the judges that answered),
+            "verdict":      "PASS" | "FAIL" | "INCONCLUSIVE"  (no judge answered),
             "reason":       str   (combined reason),
             "groq":         dict  (individual groq result),
             "gemini":       dict  (individual gemini result),
-            "disagreement": bool  (True if scores differ by > threshold),
+            "disagreement": bool  (True if two judges answered and differ by > threshold),
             "raw":          str
         }
     """
@@ -176,43 +179,29 @@ def multi_judge_response(
     except RuntimeError:
         groq_result, samba_result, cerebras_result = _asyncio.run(_run_both_judges(inputs))
 
-    # Collect valid (non-errored) judges
-    all_results = [r for r in [groq_result, samba_result, cerebras_result] if r is not None]
-    valid = [r for r in all_results if not str(r.get("reason", "")).startswith("Judge error:")]
+    consensus = combine_judges(
+        [groq_result, samba_result, cerebras_result],
+        threshold=threshold,
+        disagreement_threshold=disagreement_threshold,
+    )
 
-    if not valid:
-        avg_score = 0
-    elif len(valid) == 1:
-        avg_score = valid[0]["score"]
-        print(f"   ⚠️  Only {valid[0]['judge']} succeeded — using its score alone")
-    else:
-        avg_score = int(sum(r["score"] for r in valid) / len(valid))
-
-    score_gap    = abs(groq_result["score"] - samba_result["score"])
-    disagreement = score_gap > disagreement_threshold
-
-    verdict = "PASS" if avg_score >= threshold else "FAIL"
-
-    reason_parts = [f"{r['judge'].capitalize()}: {r['reason']}" for r in valid]
-    reason = " | ".join(reason_parts)
-
-    if disagreement:
+    if consensus["judges_used"] == 1:
+        print("   ⚠️  Only one judge succeeded — using its score alone")
+    if consensus["disagreement"]:
         print(
             f"   ⚠️  JUDGE DISAGREEMENT: Groq={groq_result['score']} "
-            f"{_second_judge_name.capitalize()}={samba_result['score']} (gap={score_gap})"
+            f"{_second_judge_name.capitalize()}={samba_result['score']} (gap={consensus['score_gap']})"
         )
 
     final = {
-        "score":        avg_score,
-        "verdict":      verdict,
-        "reason":       reason,
+        **consensus,
         "groq":         groq_result,
         "gemini":       samba_result,          # keep key name for dashboard compat
         "sambanova":    samba_result,
         "cerebras":     cerebras_result,
-        "disagreement": disagreement,
-        "judges_used":  len(valid),
-        "raw":          " | ".join(f"{r['judge']}={r['raw']}" for r in valid),
     }
+    # A run where no judge answered must not be replayed from the cache.
+    if consensus["verdict"] == "INCONCLUSIVE":
+        return final
     set_cached(_ckey, final)
     return final
