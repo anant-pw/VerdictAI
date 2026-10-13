@@ -2,6 +2,8 @@
 
 > **Your LLM passed. But did it really?**
 
+**[Live demo](https://verdictai-demo.streamlit.app/)** - the Streamlit dashboard, deployed from this repo (`dashboard/app.py`). Enter your own Groq API key to run a suite. If the database has no runs, the dashboard loads sample data so the charts are not empty.
+
 VerdictAI is an open-source framework for systematically evaluating LLM outputs — built for QA engineers and AI teams who need structured, repeatable proof that their models are behaving correctly.
 
 It runs YAML-defined test suites against any LLM, scores responses using multiple judges in parallel, detects hallucinations, tracks regressions across runs, and visualises everything in a Streamlit dashboard.
